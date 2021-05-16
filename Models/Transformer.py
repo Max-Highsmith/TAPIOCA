@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import pdb
 import math
 import torch
@@ -14,10 +15,11 @@ class PositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
         if d_model %2 ==0:
+            pe[:, 0::2] = torch.sin(position * div_term)
             pe[:, 1::2] = torch.cos(position * div_term)
         else:
+            pe[:, 0::2] = torch.sin(position * div_term)
             pe[:, 1::2] = torch.cos(position * div_term)[:,:-1]
         pe = pe.unsqueeze(0).transpose(0, 1)
         self.register_buffer('pe', pe)
@@ -32,8 +34,13 @@ class PositionalEncoding(nn.Module):
         Examples:
             >>> output = pos_encoder(x)
         """
-        x = x + self.pe[:x.size(0), :]
-        return self.dropout(x)
+        rep_pe = self.pe.repeat(1,x.shape[1],1)
+        combo  = torch.cat((x, rep_pe), dim=2)
+        return combo
+        #combo = x + self.pe[:x.size(0), :]
+        #drop_combo = self.dropout(combo)
+        #pdb.set_trace()
+        #return drop_combo
     
 def weighted_mse(output, target):
     alpha = 11
@@ -51,7 +58,8 @@ class  TransformerModule(pl.LightningModule):
                 dropout=0.5,
                 optimi="Adam",
                 lr=.01,
-                loss_type="weighted"):
+                loss_type="weighted",
+                hparams=False):
         print("init")
         super().__init__()
         
@@ -64,11 +72,16 @@ class  TransformerModule(pl.LightningModule):
         self.optimi    = optimi
         self.lr        = lr
         self.loss_type = loss_type
-        
-        self.pos_enc   = PositionalEncoding(ninp, dropout)
-        encoder_layer  = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.hparams   = hparams
+        #new
+        #self.embedding = nn.Linear(29,40)
+        #new
+        #self.pos_enc   = PositionalEncoding(ninp, max_len=11)
+        POS_ENC        = 49-ninp
+        self.pos_enc   = PositionalEncoding(POS_ENC, max_len=11)
+        encoder_layer  = TransformerEncoderLayer(POS_ENC+ninp, nhead, nhid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layer, nlayers)
-        self.decoder   = nn.Linear(ninp, ntoken)
+        self.decoder   = nn.Linear(POS_ENC+ninp, ntoken)
         self.src_mask  = None
         self.init_weights()
         self.save_hyperparameters()
@@ -84,10 +97,15 @@ class  TransformerModule(pl.LightningModule):
         return mask
     
     def forward(self, src, has_mask=True):
-        BATCH_SIZE = src.shape[0]
-        SEQ_LEN    = src.shape[1]
-        EMBED_DIM  = src.shape[2]
-        src        = src.permute(1, 0, 2)
+        #new
+        #src_1  = F.tanh(self.embedding(src))
+        src_1   = src
+        #new
+        BATCH_SIZE = src_1.shape[0]
+        SEQ_LEN    = src_1.shape[1]
+        EMBED_DIM  = src_1.shape[2]
+        src_2        = src_1.permute(1, 0, 2)
+        '''
         if has_mask:
             device = src.device
             if self.src_mask is None or self.src_mask.size(0) != len(src):
@@ -96,12 +114,14 @@ class  TransformerModule(pl.LightningModule):
                 self.src_mask = mask
         else:
             self.src_mask = None
-        src    = src * math.sqrt(self.ninp)
-        src    = self.pos_enc(src)
-        output = self.transformer_encoder(src, self.src_mask)
-        output = self.decoder(output)
-        output = output.permute(1,0,2)
-        return output
+        '''
+        self.src_mask = None
+        src_3    = src_2 #* math.sqrt(self.ninp)
+        src_4    = F.relu(self.pos_enc(src_3))
+        output_1 = self.transformer_encoder(src_4, self.src_mask)
+        output_2 = self.decoder(output_1)
+        output_3 = output_2.permute(1,0,2)
+        return output_3
     
     def training_step(self, batch, batch_idx):
         feature, label = batch
@@ -112,14 +132,13 @@ class  TransformerModule(pl.LightningModule):
             loss           = weighted_mse(output, label)
         if self.loss_type=="mse":
             loss       = F.mse_loss(output, label)
-        #print(str(loss.item())+"\noutput:"+str(output[0])+"\nlabel:"+str(label[0])+"\n")
         self.log("train weighted mse loss", loss)
         return loss
     
-    #
     def validation_step(self, batch, batch_indx):
         feature, label = batch
         feature        = feature.float()
+        label          = label.float()
         output         = self.forward(feature)
         if self.loss_type == "weighted":
             loss           = weighted_mse(output, label)
@@ -127,7 +146,6 @@ class  TransformerModule(pl.LightningModule):
             loss           = F.mse_loss(output, label)
         self.log("val weighted mse loss", loss)
         return loss
-      
 
     def test_step(self, batch, batch_indx):
         feature, label = batch

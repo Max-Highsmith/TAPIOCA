@@ -18,10 +18,11 @@ class BiLSTMModule(pl.LightningModule):
             dropout,
             bias=True,
             batch_first=True,
-            bidirectional=False,
+            bidirectional=True,
             proj_size=1,
             lr=0.001,
-            loss_type="weighted"):
+            loss_type="weighted",
+            hparams=False):
         super().__init__()
         self.lr = lr
         self.input_size=input_size
@@ -32,6 +33,7 @@ class BiLSTMModule(pl.LightningModule):
         self.dropout=dropout
         self.bidirectional=bidirectional
         self.proj_size=proj_size
+        self.hparams = hparams
         self.loss_func = self._get_loss_type(loss_type)
         self.lstm      = torch.nn.LSTM(input_size=input_size,
                                 hidden_size=hidden_size,
@@ -51,6 +53,8 @@ class BiLSTMModule(pl.LightningModule):
 
     def forward(self, src):
         output, _ = self.lstm(src)
+        output    = torch.sum(output, axis=2)
+        output    = torch.unsqueeze(output, dim=2)
         return output
 
     def training_step(self, batch, batch_idx):
